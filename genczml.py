@@ -71,6 +71,8 @@ TRAJ_WINDY_GPX = 3
 TRAJ_WINDY_KML = 4
 TRAJ_METEOBLUE = 5
 TRACK_SENSORLOG = 6
+TRACK_SENSOR_LOGGER = 7
+TRACK_UNKNOWN = -1
 
 DEFAULT_MODEL = "https://static.mah.priv.at/cors/OE-SOX-flames.glb"
 FUDGE = 2
@@ -101,7 +103,7 @@ mbcolors = {
     "150mb": ((153, 51, 0, 255), (238, 241, 0, 255)),
 }
 
-sensorlog_keys = [
+sensorlog_keys = set({
     "accelerometerAccelerationX",
     "accelerometerAccelerationY",
     "accelerometerAccelerationZ",
@@ -172,24 +174,57 @@ sensorlog_keys = [
     "motionUserAccelerationY",
     "motionUserAccelerationZ",
     "motionYaw",
-]
+})
 
-required = set(
-    {
-        "loggingTime",
-        "locationLongitude",
-        "locationLongitude",
-        "locationAltitude",
-        "locationHorizontalAccuracy",
-        "locationVerticalAccuracy",
-    }
-)
+
+required_sensorlog_keys = set({
+    "loggingTime",
+    "locationLongitude",
+    "locationLongitude",
+    "locationAltitude",
+    "locationHorizontalAccuracy",
+    "locationVerticalAccuracy",
+    "motionYaw",
+    "motionPitch",
+    "motionRoll",
+    "locationTrueHeading",
+})
+
+
+required_sensor_logger_keys = set({
+    "Orientation",
+    "Location",
+    "Magnetometer",
+    "Metadata",
+})
+
+required_sensor_logger_Location_keys = set({
+    "time",
+    "altitude",
+    "speedAccuracy",
+    "bearingAccuracy",
+    "latitude",
+    "longitude",
+    "speed",
+    "bearing",
+    "horizontalAccuracy",
+    "verticalAccuracy",
+})
 
 burner_required = set({"loggingTime", "avAudioRecorderPeakPower"})
 
-MIN_HDOP = 10
-MIN_VDOP = 5
+MAX_HDOP = 10
+MAX_VDOP = 5
 
+
+def gettime(value, offset=0):
+    if isinstance(value, float):
+        return pytz.timezone("UTC").localize(datetime.fromtimestamp(value) + timedelta(seconds=offset))
+    if isinstance(value, str):
+        return pytz.timezone("UTC").localize(dateutil.parser.parse(value) + timedelta(seconds=offset))
+    if isinstance(value, datetime):
+        return value + timedelta(seconds=offset)
+    raise Exception(f"invalid type for time: {value} : {type(value)}")
 
 class PathSet:
     _serial = count(0)
@@ -202,8 +237,10 @@ class PathSet:
         track=None,  # current track
         # trajectory=None,  # for simulated flights
         sensorlog=None,
+        sensor_logger=None,
         typus=TRACK_GPX,
         filename=None,
+        args=None
     ):
 
         self.serial = next(self._serial)
@@ -212,7 +249,9 @@ class PathSet:
         self.track = track
         self.typus = typus
         self.sensorlog = sensorlog
+        self.sensor_logger = sensor_logger
         self.filename = filename
+        self.args = args
 
         if self.typus == TRACK_SENSORLOG:
             self.first_valid = -1
@@ -220,12 +259,14 @@ class PathSet:
             i = -1
             for sample in self.sensorlog:
                 i += 1
-                if not required <= set(sample):
+                if not required_sensorlog_keys <= set(sample):
                     # logging.debug(f"skipping sample")
                     continue
-                if float(sample["locationHorizontalAccuracy"]) > MIN_HDOP:
+                if float(sample["locationHorizontalAccuracy"]) > self.args.max_hdop:
+                    sample["invalid"] = True
                     continue
-                if float(sample["locationVerticalAccuracy"]) > MIN_VDOP:
+                if float(sample["locationVerticalAccuracy"]) > self.args.max_vdop:
+                    sample["invalid"] = True
                     continue
                 # a valid sample
                 if self.first_valid < 0:
@@ -236,16 +277,49 @@ class PathSet:
                 f"{self.filename} valid: {self.first_valid}..{self.last_valid} of {i}"
             )
 
+        if self.typus == TRACK_SENSOR_LOGGER:
+            self.first_valid = -1
+            self.last_valid = -1
+            i = -1
+            for sample in self.sensor_logger["Location"]:
+                i += 1
+                if not required_sensor_logger_Location_keys <= set(sample):
+                    logging.debug(f"missing keys - skipping {sample}")
+                    continue
+                if sample["horizontalAccuracy"] > self.args.max_hdop:
+                    sample["invalid"] = True
+                    continue
+                if sample["verticalAccuracy"] > self.args.max_vdop:
+                    sample["invalid"] = True
+                    continue
+                sample["time"] = gettime(sample["time"])
+                if self.first_valid < 0:
+                    self.first_valid = i
+                if self.last_valid < i:
+                    self.last_valid = i
+            logging.debug(
+                f"{self.filename} valid: {self.first_valid}..{self.last_valid} of {i}"
+            )
+
+
     def starttime(self, skip=0):
         if self.typus == TRACK_SENSORLOG:
             datestring = self.sensorlog[self.first_valid]["loggingTime"]
             return dateutil.parser.parse(datestring) + timedelta(seconds=skip)
+
+        if self.typus == TRACK_SENSOR_LOGGER:
+            return gettime(self.sensor_logger["Location"][self.first_valid]["time"], offset=skip)
+
         return self.track.get_time_bounds().start_time + timedelta(seconds=skip)
 
     def stoptime(self, trim=0):
         if self.typus == TRACK_SENSORLOG:
             datestring = self.sensorlog[self.last_valid]["loggingTime"]
             return dateutil.parser.parse(datestring) - timedelta(seconds=trim)
+
+        if self.typus == TRACK_SENSOR_LOGGER:
+            return gettime(self.sensor_logger["Location"][self.last_valid]["time"], offset=trim)
+
         return self.track.get_time_bounds().end_time - timedelta(seconds=trim)
 
     def availability(self, skip=0, trim=0):
@@ -267,12 +341,10 @@ class PathSet:
             start = self.starttime()
 
             for sample in self.sensorlog[self.first_valid : self.last_valid + 1]:
-                if not required <= set(sample):
+                if not required_sensorlog_keys <= set(sample):
                     # logging.debug(f"skipping sample")
                     continue
-                if float(sample["locationHorizontalAccuracy"]) > MIN_HDOP:
-                    continue
-                if float(sample["locationVerticalAccuracy"]) > MIN_VDOP:
+                if "invalid" in sample:
                     continue
 
                 sampleTime = dateutil.parser.parse(sample["loggingTime"])
@@ -285,6 +357,29 @@ class PathSet:
                         float(sample["locationLongitude"]),
                         float(sample["locationLatitude"]),
                         float(sample["locationAltitude"]) + zcorrect,
+                    ]
+                )
+            return results
+
+        if self.typus == TRACK_SENSOR_LOGGER:
+            start = self.starttime()
+            for sample in self.sensor_logger["Location"][self.first_valid : self.last_valid + 1]:
+                if not required_sensor_logger_Location_keys.issubset(sample.keys()):
+                    logging.debug(f"skipping sample: {sample.keys()}")
+                    continue
+                if "invalid" in sample:
+                    continue
+
+                sampleTime = sample["time"]
+                timetag = timedelta.total_seconds(sampleTime - start)
+
+                # logging.debug(f"use {timetag=} {sampleTime=}")
+                results.extend(
+                    [
+                        timetag,
+                        float(sample["longitude"]),
+                        float(sample["latitude"]),
+                        float(sample["altitude"]) + zcorrect,
                     ]
                 )
             return results
@@ -379,7 +474,7 @@ class PathSet:
 
             for sample in self.sensorlog[self.first_valid : self.last_valid + 1]:
 
-                if not required <= set(sample):
+                if not required_sensorlog_keys <= set(sample):
                     # logging.debug(f"skipping sample")
                     continue
 
@@ -877,6 +972,80 @@ class PathSet:
         )
         packets.append(p)
 
+
+    def gen_track_sensor_logger(
+        self, args, packets, vehicle=None, genlabel=False, **kwargs
+    ):
+        logging.debug(f"Sensor Logger track {self.filename} {args=}")
+        lb = None
+        if genlabel:
+            lb = Label(
+                text="fixme  gen_track Sensor Logger",
+                show=True,
+                scale=0.5,
+                pixelOffset={"cartesian2": [50, -30]},
+            )
+
+        position = Position(
+            interpolationDegree=args.degree,
+            interpolationAlgorithm=args.algo,
+            epoch=self.starttime(),
+            cartographicDegrees=self.data(zcorrect=args.delta_h),
+        )
+
+        red = Color(rgba=[255, 0, 0, 64])
+        grn = Color(rgba=[0, 255, 0, 64])
+        po = PolylineOutlineMaterial(color=red, outlineColor=grn, outlineWidth=4)
+        path = Path(
+            material=Material(polylineOutline=po),
+            width=6,
+            leadTime=0,
+            trailTime=100000,
+            resolution=5,
+        )
+
+        # nt = {
+        #     "Burner1": {"scale": self.burner_intervals(args)},
+        #     "Burner2": {"scale": self.burner_intervals(args)},
+        # }
+        vehicle = Model(
+            gltf=args.model_uri, scale=1.0, minimumPixelSize=64
+            #nodeTransformations=nt
+        )
+        kwargs = dict()
+        properties = dict()
+
+        options = {
+            "velocity_orient": args.velocity_orient,
+        }
+
+        properties = {**properties, **options}
+        if args.fake_sensors:
+            properties = {**properties, **self.simulate_sensors(args)}
+
+        p = Packet(
+            id=f"track{self.serial}",
+            name=args.docname,
+            # viewFrom=45,800,300&lookAt=track0
+            viewFrom=ViewFrom(cartesian=Cartesian3Value(values=viewFromPos)),
+            description=args.doccomment,
+            position=position,
+            # orientation=Orientation(
+            #     interpolationDegree=args.degree,
+            #     interpolationAlgorithm=args.algo,
+            #     epoch=self.starttime(),
+            #     unitQuaternion=self.orient(args),
+            # ),
+            label=lb,
+            path=path,
+            model=vehicle,
+            availability=self.availability(),
+            properties=properties,
+            **kwargs,
+        )
+        packets.append(p)
+
+
     def generate(self, args, packets, **kwargs):
         if self.typus == TRAJ_WINDY_GPX:
             self.gen_traj_windy(args, packets, **kwargs)
@@ -894,6 +1063,9 @@ class PathSet:
 
         if self.typus == TRACK_SENSORLOG:
             self.gen_track_sensorlog(args, packets, **kwargs)
+
+        if self.typus == TRACK_SENSOR_LOGGER:
+            self.gen_track_sensor_logger(args, packets, **kwargs)
 
     def simulate_burner(self, args):
         BURNER_INTERVAL_MU = 15
@@ -1284,6 +1456,22 @@ def main():
         help="animation playback time multiplier",
     )
     ap.add_argument(
+        "--vdop",
+        action="store",
+        dest="max_vdop",
+        default=MAX_VDOP,
+        type=float,
+        help="maximum vdop (vertical dilution of precision) for a valid location sample",
+    )
+    ap.add_argument(
+        "--hdop",
+        action="store",
+        dest="max_hdop",
+        default=MAX_HDOP,
+        type=float,
+        help="maximum hdop (horizontal dilution of precision) for a valid location sample",
+    )
+    ap.add_argument(
         "-I",
         "--degree",
         action="store",
@@ -1330,7 +1518,7 @@ def main():
                 gpx = gpxpy.parse(gpx_file)
                 i = 0
                 for t in gpx.tracks:
-                    gp = PathSet(gpx=gpx, track=t, typus=TRACK_GPX, filename=filename)
+                    gp = PathSet(gpx=gpx, track=t, typus=TRACK_GPX, filename=filename, args=args)
                     gp.ext = parse_ext(t)
                     begin, end = t.get_time_bounds()
                     logging.debug(f"{begin=}  {end=}")
@@ -1350,7 +1538,7 @@ def main():
             # 1624098163,2021-06-19T10:22:43Z,OEKGO,"46.936798,15.387732",2000,100,0
             gpx = csv2gpx(fnp)
             t = gpx.tracks[0]
-            gp = PathSet(gpx=gpx, track=t, typus=TRACK_GPX, filename=filename)
+            gp = PathSet(gpx=gpx, track=t, typus=TRACK_GPX, filename=filename, args=args)
             gp.filename = fnp
             logging.debug(f"{filename}: FR24 CSV: {gp.filename}")
             result.append(gp)
@@ -1368,7 +1556,7 @@ def main():
 
                     gpx = igc2gpx(args, header, fix_records, fnp.stem)
                     t = gpx.tracks[0]
-                    gp = PathSet(gpx=gpx, track=t, typus=TRACK_GPX, filename=filename)
+                    gp = PathSet(gpx=gpx, track=t, typus=TRACK_GPX, filename=filename, args=args)
                     begin, end = t.get_time_bounds()
                     mintime = min(mintime, begin)
                     maxtime = max(maxtime, end)
@@ -1385,24 +1573,34 @@ def main():
             result.append(gp)
 
         if fnp.suffix == ".json":
+
             with open(filename, "r") as json_file:
-                jsarr = json.load(json_file)
-                if len(jsarr) == 0:
+                content = json.load(json_file)
+                if len(content) == 0:
                     logging.error(f"{fnp}: empty JSON track")
                     continue
-                # test for sensorlog file
-                if jsarr[0].keys() <= set(sensorlog_keys):
+
+                if isinstance(content, list) and sensorlog_keys.issubset(content[0].keys()):
                     logging.debug(f"{fnp}: sensorlog format detected")
-                else:
-                    logging.error(f"{fnp}: cant decode json")
+                    # logging.debug(f"{fnp}: {content[0].keys()}")
+                    gp = PathSet(sensorlog=content, typus=TRACK_SENSORLOG, filename=fnp, args=args)
+                    gp.name = "sensorlog " + str(fnp)
+                    mintime = min(mintime, gp.starttime())
+                    maxtime = max(maxtime, gp.stoptime(trim=FUDGE))
+                    result.append(gp)
                     continue
 
-                # logging.debug(f"{fnp}: {jsarr[0].keys()}")
-                gp = PathSet(sensorlog=jsarr, typus=TRACK_SENSORLOG, filename=fnp)
-                gp.name = "sensorlog " + str(fnp)
+                if isinstance(content, dict) and required_sensor_logger_keys.issubset(content.keys()):
+                    logging.debug(f"{fnp}: Sensor Logger format detected")
+                    gp = PathSet(sensor_logger=content, typus=TRACK_SENSOR_LOGGER, filename=fnp, args=args)
+                    gp.name = "Sensor Logger " + str(fnp)
+                    mintime = min(mintime, gp.starttime())
+                    maxtime = max(maxtime, gp.stoptime(trim=FUDGE))
+                    result.append(gp)
+                    continue
 
-                mintime = min(mintime, gp.starttime())
-                maxtime = max(maxtime, gp.stoptime(trim=FUDGE))
+                logging.error(f"{fnp}: cant decode json")
+                continue
 
             result.append(gp)
 
@@ -1416,7 +1614,7 @@ def main():
                     ext = parse_ext(t)
                     if {"model", "level", "distance"} <= set(ext):
                         gp = PathSet(
-                            gpx=gpx, track=t, typus=TRAJ_WINDY_GPX, filename=filename
+                            gpx=gpx, track=t, typus=TRAJ_WINDY_GPX, filename=filename, args=args
                         )
                         gp.ext = ext
                         gp.name = "windy " + gp.ext["model"] + " " + t.name
@@ -1427,14 +1625,14 @@ def main():
                         gpx.author_name == "meteoblue AG"
                     ) and gpx.author_email == "info@meteoblue.com":
                         gp = PathSet(
-                            gpx=gpx, track=t, typus=TRAJ_METEOBLUE, filename=filename
+                            gpx=gpx, track=t, typus=TRAJ_METEOBLUE, filename=filename, args=args
                         )
                         gp.name = "meteoblue " + t.name
                         logging.debug(f"{filename=}, meteoblue traj: {gp.name}")
 
                     elif gpx.creator == "GPSBabel - https://www.gpsbabel.org":
                         gp = PathSet(
-                            gpx=gpx, track=t, typus=TRAJ_METEOBLUE, filename=filename
+                            gpx=gpx, track=t, typus=TRAJ_METEOBLUE, filename=filename, args=args
                         )
                         gp.name = "gpsbabel"
                         logging.debug(f"{filename=}, gpsbabel traj: {gp.name}")
@@ -1450,7 +1648,7 @@ def main():
                 gpx = gpxpy.gpx.GPX()
                 kml = parser.parse(kml_file).getroot()
                 logging.debug(kml.Document.Folder.name.text)
-                gp = PathSet(kml=kml, typus=TRAJ_WINDY_KML, filename=filename)
+                gp = PathSet(kml=kml, typus=TRAJ_WINDY_KML, filename=filename, args=args)
                 gp.name = "windy " + filename
                 result.append(gp)
 
