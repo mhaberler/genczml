@@ -1,0 +1,10 @@
+pymap3d==2.7.0
+transformations==2021.6.6
+gpxpy==1.4.2
+pykml==0.2.0
+aerofiles.egg==info
+transforms3d==0.3.1
+czml3.egg==info
+aerofiles==1.0.0
+czml3==0.6.0
+python_dateutil==2.8.2
