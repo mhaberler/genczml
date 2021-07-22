@@ -2,6 +2,7 @@
 import sys
 import re
 import json
+import math
 import argparse
 import logging
 from itertools import count
@@ -481,7 +482,56 @@ class PathSet:
                             }
                         )
                 was_burning = burning
-        return samples
+            return samples
+
+        if self.typus == TRACK_SENSOR_LOGGER:
+            start = self.starttime()
+            peakvolumes = []
+            maxvolume = -1
+            was_burning = False
+            cart0 = [0.1, 0.1, 0.1]
+            cart1 = [1, 1, 1]
+
+            samples = []
+            samples.append({"interval": self.availability(), "cartesian": cart0})
+
+            # determine epeak volume
+            for sample in self.sensor_logger["Microphone"]:
+
+                # if not burner_required <= set(sample):
+                #     logging.debug(f"skipping sample")
+                #     continue
+                peak = float(sample["dBFS"])
+                if peak > maxvolume:
+                    maxvolume = peak
+            cutoff = maxvolume - volume_cutoff
+            logging.debug(f"sensorlog: audio {maxvolume=} {cutoff=} dB")
+
+            for sample in self.sensor_logger["Microphone"]:
+                # if not burner_required <= set(sample):
+                #     logging.debug(f"skipping sample")
+                #     continue
+
+                sampleTime = sample["time"]
+                # timetag = timedelta.total_seconds(sampleTime - start)
+                peak = float(sample["dBFS"])
+
+                burning = peak > cutoff
+                if burning ^ was_burning:  # different
+                    if burning:
+                        burnstart = sampleTime
+                    else:
+                        samples.append(
+                            {
+                                "interval": format_datetime_like(gettime(burnstart))
+                                + "/"
+                                + format_datetime_like(gettime(sampleTime)),
+                                "cartesian": cart1,
+                            }
+                        )
+                was_burning = burning
+            return samples
+
 
     def orient(self, args, hprfunc=hpr_default):
 
@@ -527,50 +577,35 @@ class PathSet:
         if self.typus == TRACK_SENSOR_LOGGER and "Orientation" in self.sensor_logger:
             orient_values = pd.json_normalize(self.sensor_logger["Orientation"])
             ts0 = to_timestamp(self.sensor_logger["Orientation"][0]["time"])
-            # 1626927421
-            # 1626927416
-            #start = self.starttime()
-
             results = []
 
             for sample in self.sensor_logger["Location"]:
                 if "invalid" in sample:
                     logging.debug(f"skipping {sample}")
                     continue
-                # if not required_sensorlog_keys <= set(sample):
-                #     # logging.debug(f"skipping sample")
-                #     continue
-                # Loc0 1626927416
-                # Or0  1626927421
-                #sampleTime = gettime(sample["time"])
-                #ts = sampleTime.timestamp()
-                ts = to_timestamp(sample["time"])
-                #ts = sample["time"]
-                #timetag = timedelta.total_seconds(ts - ts0)
-                timetag = ts - ts0
-                #logging.debug(f"{ts=} {type(ts)} {ts0=} {timetag=} {sample['time']}  {int(ts-ts0)}")
 
-                deg = int(180 + np.degrees(interpolate(ts, orient_values, 'time', 'yaw')))
-                #logging.debug(f"{ts} {sample['time']}  {int(ts-ts0)} {deg=}")
+                ts = to_timestamp(sample["time"])
+                timetag = ts - ts0
 
                 if args.gyro:
                     a = hpr2Quaternion(
                         sample["latitude"],
                         sample["longitude"],
                         sample["altitude"],
-                        np.degrees(interpolate(ts, orient_values, 'time', 'yaw')),
-                        np.degrees(interpolate(ts, orient_values, 'time', 'pitch')),
-                        np.degrees(interpolate(ts, orient_values, 'time', 'roll')),
+                        math.pi + interpolate(ts, orient_values, 'time', 'yaw'),
+                        math.pi + interpolate(ts, orient_values, 'time', 'pitch'),
+                        math.pi + interpolate(ts, orient_values, 'time', 'roll'),
+                        degrees=False
                     )
                 else:
                     a = hpr2Quaternion(
                         sample["latitude"],
                         sample["longitude"],
                         sample["altitude"],
-                        deg,
-                        #0,
+                        math.pi + interpolate(ts, orient_values, 'time', 'yaw'),
                         0,
                         0,
+                        degrees=False
                     )
 
                 # [Time, X, Y, Z, W, Time, X, Y, Z, W, ...]
@@ -1079,13 +1114,13 @@ class PathSet:
             resolution=5,
         )
 
-        # nt = {
-        #     "Burner1": {"scale": self.burner_intervals(args)},
-        #     "Burner2": {"scale": self.burner_intervals(args)},
-        # }
+        nt = {
+            "Burner1": {"scale": self.burner_intervals(args)},
+            "Burner2": {"scale": self.burner_intervals(args)},
+        }
         vehicle = Model(
-            gltf=args.model_uri, scale=1.0, minimumPixelSize=64
-            #nodeTransformations=nt
+            gltf=args.model_uri, scale=1.0, minimumPixelSize=64,
+            nodeTransformations=nt
         )
         kwargs = dict()
         properties = dict()
