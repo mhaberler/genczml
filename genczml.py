@@ -16,6 +16,7 @@ from pykml import parser
 import dateutil.parser
 import csv
 import numpy as np
+import pandas as pd
 
 from transforms3d.quaternions import qconjugate, qmult, qisunit
 from transformations import (
@@ -63,7 +64,7 @@ from czml3.types import (
 from cesiumNEDtoFixedFrame import northEastDownToFixedFrame
 from orient import hpr2Quaternion, corrQuaternion
 
-default_delta = 3  # m
+default_delta = 1.5  # m
 volume_cutoff = 6  # dB under peakvolume
 TRACK_GPX = 1
 TRACK_IGC = 2
@@ -213,17 +214,34 @@ required_sensor_logger_Location_keys = set({
 
 burner_required = set({"loggingTime", "avAudioRecorderPeakPower"})
 
-MAX_HDOP = 10
+MAX_HDOP = 5
 MAX_VDOP = 5
 
+# https://stackoverflow.com/questions/56832608/how-can-i-interpolate-values-in-a-python-dataframe
+def interpolate(xval, df, xcol, ycol):
+# compute xval as the linear interpolation of xval where df is a dataframe and
+#  df.x are the x coordinates, and df.y are the y coordinates. df.x is expected to be sorted.
+    return np.interp([xval], df[xcol], df[ycol])
 
 def gettime(value, offset=0):
     if isinstance(value, float):
-        return pytz.timezone("UTC").localize(datetime.fromtimestamp(value) + timedelta(seconds=offset))
+        return datetime.utcfromtimestamp(value + offset).replace(tzinfo=pytz.utc)
     if isinstance(value, str):
-        return pytz.timezone("UTC").localize(dateutil.parser.parse(value) + timedelta(seconds=offset))
+        return dateutil.parser.parse(value) + timedelta(seconds=offset)
     if isinstance(value, datetime):
         return value + timedelta(seconds=offset)
+    raise Exception(f"invalid type for time: {value} : {type(value)}")
+
+def to_timestamp(value):
+    if isinstance(value, float):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, datetime):
+        return value.timestamp()
+    if isinstance(value, str):
+        return dateutil.parser.parse(value).timestamp()
+
     raise Exception(f"invalid type for time: {value} : {type(value)}")
 
 class PathSet:
@@ -505,6 +523,63 @@ class PathSet:
                 results.extend([timetag, a[0], a[1], a[2], a[3]])
 
             return results
+
+        if self.typus == TRACK_SENSOR_LOGGER and "Orientation" in self.sensor_logger:
+            orient_values = pd.json_normalize(self.sensor_logger["Orientation"])
+            ts0 = to_timestamp(self.sensor_logger["Orientation"][0]["time"])
+            # 1626927421
+            # 1626927416
+            #start = self.starttime()
+
+            results = []
+
+            for sample in self.sensor_logger["Location"]:
+                if "invalid" in sample:
+                    logging.debug(f"skipping {sample}")
+                    continue
+                # if not required_sensorlog_keys <= set(sample):
+                #     # logging.debug(f"skipping sample")
+                #     continue
+                # Loc0 1626927416
+                # Or0  1626927421
+                #sampleTime = gettime(sample["time"])
+                #ts = sampleTime.timestamp()
+                ts = to_timestamp(sample["time"])
+                #ts = sample["time"]
+                #timetag = timedelta.total_seconds(ts - ts0)
+                timetag = ts - ts0
+                #logging.debug(f"{ts=} {type(ts)} {ts0=} {timetag=} {sample['time']}  {int(ts-ts0)}")
+
+                deg = int(180 + np.degrees(interpolate(ts, orient_values, 'time', 'yaw')))
+                #logging.debug(f"{ts} {sample['time']}  {int(ts-ts0)} {deg=}")
+
+                if args.gyro:
+                    a = hpr2Quaternion(
+                        sample["latitude"],
+                        sample["longitude"],
+                        sample["altitude"],
+                        np.degrees(interpolate(ts, orient_values, 'time', 'yaw')),
+                        np.degrees(interpolate(ts, orient_values, 'time', 'pitch')),
+                        np.degrees(interpolate(ts, orient_values, 'time', 'roll')),
+                    )
+                else:
+                    a = hpr2Quaternion(
+                        sample["latitude"],
+                        sample["longitude"],
+                        sample["altitude"],
+                        deg,
+                        #0,
+                        0,
+                        0,
+                    )
+
+                # [Time, X, Y, Z, W, Time, X, Y, Z, W, ...]
+                # https://github.com/AnalyticalGraphicsInc/czml-writer/wiki/UnitQuaternionValue
+                results.extend([timetag, a[0], a[1], a[2], a[3]])
+
+            return results
+
+
 
         # if self.typus == TRACK_GPX:
         prev_hpr = (-1, -1, -1)
@@ -1030,12 +1105,12 @@ class PathSet:
             viewFrom=ViewFrom(cartesian=Cartesian3Value(values=viewFromPos)),
             description=args.doccomment,
             position=position,
-            # orientation=Orientation(
-            #     interpolationDegree=args.degree,
-            #     interpolationAlgorithm=args.algo,
-            #     epoch=self.starttime(),
-            #     unitQuaternion=self.orient(args),
-            # ),
+            orientation=Orientation(
+                interpolationDegree=args.degree,
+                interpolationAlgorithm=args.algo,
+                epoch=self.starttime(),
+                unitQuaternion=self.orient(args),
+            ),
             label=lb,
             path=path,
             model=vehicle,
@@ -1392,6 +1467,14 @@ def main():
         help="the name field in the document packet, also used for the GPS track",
     )
     ap.add_argument(
+        "-o",
+        "--output",
+        action="store",
+        dest="output",
+        default=None,
+        help="CZML output filename",
+    )
+    ap.add_argument(
         "-C",
         "--doc-comment",
         action="store",
@@ -1678,8 +1761,11 @@ def main():
         path.generate(args, packets)
 
     document = Document(packets)
-    print(document.dumps(indent=4))  # , cls=NumpyEncoder)) #, default=np_encoder))
-
+    temp = sys.stdout
+    if args.output:
+        print(document.dumps(indent=4),file=open(args.output, 'w'))
+    else:
+        print(document.dumps(indent=4))  # , cls=NumpyEncoder)) #, default=np_encoder))
 
 if __name__ == "__main__":
     main()
