@@ -8,11 +8,16 @@ from pymap3d.ecef import geodetic2ecef
 from cesiumNEDtoFixedFrame import northEastDownToFixedFrame
 
 
-def hpr2Quaternion(lat, lon, alt, heading, pitch, roll):
+def hpr2Quaternion(lat, lon, alt, heading, pitch, roll, degrees=True):
 
-    rotZ = rotation_matrix(math.radians(heading), [0,0,1])
-    rotY = rotation_matrix(math.radians(180 + pitch), [0,1,0])
-    rotX = rotation_matrix(math.radians(roll), [1,0,0])
+    if degrees:
+        rotZ = rotation_matrix(math.radians(heading), [0,0,1])
+        rotY = rotation_matrix(math.radians(180 + pitch), [0,1,0])
+        rotX = rotation_matrix(math.radians(roll), [1,0,0])
+    else:
+        rotZ = rotation_matrix(heading, [0,0,1])
+        rotY = rotation_matrix(pitch + math.pi, [0,1,0])
+        rotX = rotation_matrix(roll, [1,0,0])
     # print("rotX:",rotX)
     tmp = np.dot(rotZ, rotY)
     rotM = np.dot(tmp, rotX)
