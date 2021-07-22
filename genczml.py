@@ -65,8 +65,9 @@ from czml3.types import (
 from cesiumNEDtoFixedFrame import northEastDownToFixedFrame
 from orient import hpr2Quaternion, corrQuaternion
 
-default_delta = 1.5  # m
-volume_cutoff = 6  # dB under peakvolume
+DELTA_H_DEFAULT = 1.5  # m
+MULTIPLIER_DEFAULT = 10
+VOLUME_CUTOFF = 6  # dB under peakvolume
 TRACK_GPX = 1
 TRACK_IGC = 2
 TRAJ_WINDY_GPX = 3
@@ -456,7 +457,7 @@ class PathSet:
                 peak = float(sample["avAudioRecorderPeakPower"])
                 if peak > maxvolume:
                     maxvolume = peak
-            cutoff = maxvolume - volume_cutoff
+            cutoff = maxvolume - args.volume_cutoff
             logging.debug(f"sensorlog: audio {maxvolume=} {cutoff=} dB")
 
             for sample in self.sensorlog:
@@ -504,7 +505,7 @@ class PathSet:
                 peak = float(sample["dBFS"])
                 if peak > maxvolume:
                     maxvolume = peak
-            cutoff = maxvolume - volume_cutoff
+            cutoff = maxvolume - args.volume_cutoff
             logging.debug(f"sensorlog: audio {maxvolume=} {cutoff=} dB")
 
             for sample in self.sensor_logger["Microphone"]:
@@ -581,18 +582,20 @@ class PathSet:
 
             for sample in self.sensor_logger["Location"]:
                 if "invalid" in sample:
-                    logging.debug(f"skipping {sample}")
                     continue
 
                 ts = to_timestamp(sample["time"])
                 timetag = ts - ts0
+
+                azimuth = math.pi + interpolate(ts, orient_values, 'time', 'yaw')
+                #logging.debug(f"azimuth={np.degrees(azimuth)}")
 
                 if args.gyro:
                     a = hpr2Quaternion(
                         sample["latitude"],
                         sample["longitude"],
                         sample["altitude"],
-                        math.pi + interpolate(ts, orient_values, 'time', 'yaw'),
+                        azimuth,
                         math.pi + interpolate(ts, orient_values, 'time', 'pitch'),
                         math.pi + interpolate(ts, orient_values, 'time', 'roll'),
                         degrees=False
@@ -602,7 +605,7 @@ class PathSet:
                         sample["latitude"],
                         sample["longitude"],
                         sample["altitude"],
-                        math.pi + interpolate(ts, orient_values, 'time', 'yaw'),
+                        azimuth,
                         0,
                         0,
                         degrees=False
@@ -1569,7 +1572,7 @@ def main():
         "--multiplier",
         action="store",
         dest="multiplier",
-        default=60.0,
+        default=MULTIPLIER_DEFAULT,
         type=float,
         help="animation playback time multiplier",
     )
@@ -1589,6 +1592,15 @@ def main():
         type=float,
         help="maximum hdop (horizontal dilution of precision) for a valid location sample",
     )
+    ap.add_argument(
+        "--cutoff",
+        action="store",
+        dest="volume_cutoff",
+        default=VOLUME_CUTOFF,
+        type=float,
+        help="volume cutoff - decibels below peak volume; volume above cutoff triggers burner on",
+    )
+
     ap.add_argument(
         "-I",
         "--degree",
@@ -1612,7 +1624,7 @@ def main():
         "--delta-h",
         action="store",
         dest="delta_h",
-        default=default_delta,
+        default=DELTA_H_DEFAULT,
         type=float,
         help="model altitude correction",
     )
