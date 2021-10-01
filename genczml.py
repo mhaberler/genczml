@@ -67,6 +67,7 @@ from orient import hpr2Quaternion, corrQuaternion
 
 DELTA_H_DEFAULT = 1.5  # m
 MULTIPLIER_DEFAULT = 10
+MINIMUM_BURN = 0.5 # seconds - extend short noise peaks to (at least) this
 VOLUME_CUTOFF = 6  # dB under peakvolume
 TRACK_GPX = 1
 TRACK_IGC = 2
@@ -216,8 +217,8 @@ required_sensor_logger_Location_keys = set({
 
 burner_required = set({"loggingTime", "avAudioRecorderPeakPower"})
 
-MAX_HDOP = 5
-MAX_VDOP = 5
+MAX_HDOP = 20
+MAX_VDOP = 20
 
 # https://stackoverflow.com/questions/56832608/how-can-i-interpolate-values-in-a-python-dataframe
 def interpolate(xval, df, xcol, ycol):
@@ -355,6 +356,8 @@ class PathSet:
         zcorrect=0,
         timestamps=True,
     ):
+        logging.debug(f"data: {self.typus=}")
+
         results = []
 
         if self.typus == TRACK_SENSORLOG:
@@ -404,7 +407,7 @@ class PathSet:
                 )
             return results
 
-        if self.typus == TRACK_GPX:
+        if self.typus == TRACK_GPX or self.typus == TRAJ_WINDY_GPX:
 
             start = self.starttime()
 
@@ -458,7 +461,7 @@ class PathSet:
                 if peak > maxvolume:
                     maxvolume = peak
             cutoff = maxvolume - args.volume_cutoff
-            logging.debug(f"sensorlog: audio {maxvolume=} {cutoff=} dB")
+            logging.debug(f"sensorlog: audio {maxvolume=:.1f} dB {cutoff=:.1f} dB")
 
             for sample in self.sensorlog:
                 if not burner_required <= set(sample):
@@ -494,6 +497,10 @@ class PathSet:
             cart1 = [1, 1, 1]
 
             samples = []
+
+            if not "Microphone" in self.sensor_logger:
+                return samples
+
             samples.append({"interval": self.availability(), "cartesian": cart0})
 
             # determine epeak volume
@@ -506,7 +513,7 @@ class PathSet:
                 if peak > maxvolume:
                     maxvolume = peak
             cutoff = maxvolume - args.volume_cutoff
-            logging.debug(f"sensorlog: audio {maxvolume=} {cutoff=} dB")
+            logging.debug(f"sensor logger: audio {maxvolume=:.1f} dB {cutoff=:.1f} dB")
 
             for sample in self.sensor_logger["Microphone"]:
                 # if not burner_required <= set(sample):
@@ -1117,14 +1124,22 @@ class PathSet:
             resolution=5,
         )
 
-        nt = {
-            "Burner1": {"scale": self.burner_intervals(args)},
-            "Burner2": {"scale": self.burner_intervals(args)},
-        }
-        vehicle = Model(
-            gltf=args.model_uri, scale=1.0, minimumPixelSize=64,
-            nodeTransformations=nt
-        )
+        burner = self.burner_intervals(args)
+        if burner:
+            nt = {
+                "Burner1": {"scale": burner},
+                "Burner2": {"scale": burner},
+            }
+
+            vehicle = Model(
+                gltf=args.model_uri, scale=1.0, minimumPixelSize=64,
+                nodeTransformations=nt
+            )
+        else:
+            vehicle = Model(
+                gltf=args.model_uri, scale=1.0, minimumPixelSize=64,
+            )
+
         kwargs = dict()
         properties = dict()
 
@@ -1600,7 +1615,14 @@ def main():
         type=float,
         help="volume cutoff - decibels below peak volume; volume above cutoff triggers burner on",
     )
-
+    ap.add_argument(
+        "--minburn",
+        action="store",
+        dest="minimum_burn",
+        default=MINIMUM_BURN,
+        type=float,
+        help="minimum burn duration - extend short peaks to at least that long",
+    )
     ap.add_argument(
         "-I",
         "--degree",
