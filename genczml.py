@@ -18,6 +18,7 @@ import dateutil.parser
 import csv
 import numpy as np
 import pandas as pd
+import geojson
 
 from transforms3d.quaternions import qconjugate, qmult, qisunit
 from transformations import (
@@ -67,7 +68,7 @@ from orient import hpr2Quaternion, corrQuaternion
 
 DELTA_H_DEFAULT = 1.5  # m
 MULTIPLIER_DEFAULT = 10
-MINIMUM_BURN = 0.5 # seconds - extend short noise peaks to (at least) this
+MINIMUM_BURN = 0.5  # seconds - extend short noise peaks to (at least) this
 VOLUME_CUTOFF = 6  # dB under peakvolume
 TRACK_GPX = 1
 TRACK_IGC = 2
@@ -76,6 +77,7 @@ TRAJ_WINDY_KML = 4
 TRAJ_METEOBLUE = 5
 TRACK_SENSORLOG = 6
 TRACK_SENSOR_LOGGER = 7
+TRACK_BALLONVARIO_GEOJSON = 8
 TRACK_UNKNOWN = -1
 
 DEFAULT_MODEL = "https://static.mah.priv.at/cors/OE-SOX-flames.glb"
@@ -107,113 +109,151 @@ mbcolors = {
     "150mb": ((153, 51, 0, 255), (238, 241, 0, 255)),
 }
 
-sensorlog_keys = set({
-    "accelerometerAccelerationX",
-    "accelerometerAccelerationY",
-    "accelerometerAccelerationZ",
-    "accelerometerTimestamp_sinceReboot",
-    "activity",
-    "activityActivityConfidence",
-    "activityActivityStartDate",
-    "activityTimestamp_sinceReboot",
-    "altimeterPressure",
-    "altimeterRelativeAltitude",
-    "altimeterReset",
-    "altimeterTimestamp_sinceReboot",
-    "avAudioRecorderAveragePower",
-    "avAudioRecorderPeakPower",
-    "batteryLevel",
-    "batteryState",
-    "deviceID",
-    "deviceOrientation",
-    "gyroRotationX",
-    "gyroRotationY",
-    "gyroRotationZ",
-    "gyroTimestamp_sinceReboot",
-    "identifierForVendor",
-    "IP_en0",
-    "IP_pdp_ip0",
-    "label",
-    "locationAltitude",
-    "locationCourse",
-    "locationFloor",
-    "locationHeadingAccuracy",
-    "locationHeadingTimestamp_since1970",
-    "locationHeadingX",
-    "locationHeadingY",
-    "locationHeadingZ",
-    "locationHorizontalAccuracy",
-    "locationLatitude",
-    "locationLongitude",
-    "locationMagneticHeading",
-    "locationSpeed",
-    "locationTimestamp_since1970",
-    "locationTrueHeading",
-    "locationVerticalAccuracy",
-    "loggingTime",
-    "logSampleNr",
-    "magnetometerTimestamp_sinceReboot",
-    "magnetometerX",
-    "magnetometerY",
-    "magnetometerZ",
-    "motionAttitudeReferenceFrame",
-    "motionGravityX",
-    "motionGravityY",
-    "motionGravityZ",
-    "motionMagneticFieldCalibrationAccuracy",
-    "motionMagneticFieldX",
-    "motionMagneticFieldY",
-    "motionMagneticFieldZ",
-    "motionPitch",
-    "motionQuaternionW",
-    "motionQuaternionX",
-    "motionQuaternionY",
-    "motionQuaternionZ",
-    "motionRoll",
-    "motionRotationRateX",
-    "motionRotationRateY",
-    "motionRotationRateZ",
-    "motionTimestamp_sinceReboot",
-    "motionUserAccelerationX",
-    "motionUserAccelerationY",
-    "motionUserAccelerationZ",
-    "motionYaw",
-})
+sensorlog_keys = set(
+    {
+        "accelerometerAccelerationX",
+        "accelerometerAccelerationY",
+        "accelerometerAccelerationZ",
+        "accelerometerTimestamp_sinceReboot",
+        "activity",
+        "activityActivityConfidence",
+        "activityActivityStartDate",
+        "activityTimestamp_sinceReboot",
+        "altimeterPressure",
+        "altimeterRelativeAltitude",
+        "altimeterReset",
+        "altimeterTimestamp_sinceReboot",
+        "avAudioRecorderAveragePower",
+        "avAudioRecorderPeakPower",
+        "batteryLevel",
+        "batteryState",
+        "deviceID",
+        "deviceOrientation",
+        "gyroRotationX",
+        "gyroRotationY",
+        "gyroRotationZ",
+        "gyroTimestamp_sinceReboot",
+        "identifierForVendor",
+        "IP_en0",
+        "IP_pdp_ip0",
+        "label",
+        "locationAltitude",
+        "locationCourse",
+        "locationFloor",
+        "locationHeadingAccuracy",
+        "locationHeadingTimestamp_since1970",
+        "locationHeadingX",
+        "locationHeadingY",
+        "locationHeadingZ",
+        "locationHorizontalAccuracy",
+        "locationLatitude",
+        "locationLongitude",
+        "locationMagneticHeading",
+        "locationSpeed",
+        "locationTimestamp_since1970",
+        "locationTrueHeading",
+        "locationVerticalAccuracy",
+        "loggingTime",
+        "logSampleNr",
+        "magnetometerTimestamp_sinceReboot",
+        "magnetometerX",
+        "magnetometerY",
+        "magnetometerZ",
+        "motionAttitudeReferenceFrame",
+        "motionGravityX",
+        "motionGravityY",
+        "motionGravityZ",
+        "motionMagneticFieldCalibrationAccuracy",
+        "motionMagneticFieldX",
+        "motionMagneticFieldY",
+        "motionMagneticFieldZ",
+        "motionPitch",
+        "motionQuaternionW",
+        "motionQuaternionX",
+        "motionQuaternionY",
+        "motionQuaternionZ",
+        "motionRoll",
+        "motionRotationRateX",
+        "motionRotationRateY",
+        "motionRotationRateZ",
+        "motionTimestamp_sinceReboot",
+        "motionUserAccelerationX",
+        "motionUserAccelerationY",
+        "motionUserAccelerationZ",
+        "motionYaw",
+    }
+)
+
+bfc_keys = set({
+        "runtime",
+        "voltage",
+        "charge",
+        "date",
+        "time",
+        "startflag",
+        "pressalt",
+        "pressure",
+        "sensortemp",
+        "qnh",
+        "vario",
+        "envtemp",
+        "heading",
+        "groundspeed",
+        "lat",
+        "lon",
+        "gpsalt",
+    }
+)
 
 
-required_sensorlog_keys = set({
-    "loggingTime",
-    "locationLongitude",
-    "locationLongitude",
-    "locationAltitude",
-    "locationHorizontalAccuracy",
-    "locationVerticalAccuracy",
-    "motionYaw",
-    "motionPitch",
-    "motionRoll",
-    "locationTrueHeading",
-})
+geojson_keys = set({
+        "features",
+        "type",
+        "properties",
+    }
+)
 
 
-required_sensor_logger_keys = set({
-    "Orientation",
-    "Location",
-    "Magnetometer",
-    "Metadata",
-})
 
-required_sensor_logger_Location_keys = set({
-    "time",
-    "altitude",
-    "speedAccuracy",
-    "bearingAccuracy",
-    "latitude",
-    "longitude",
-    "speed",
-    "bearing",
-    "horizontalAccuracy",
-    "verticalAccuracy",
-})
+required_sensorlog_keys = set(
+    {
+        "loggingTime",
+        "locationLongitude",
+        "locationLongitude",
+        "locationAltitude",
+        "locationHorizontalAccuracy",
+        "locationVerticalAccuracy",
+        "motionYaw",
+        "motionPitch",
+        "motionRoll",
+        "locationTrueHeading",
+    }
+)
+
+
+required_sensor_logger_keys = set(
+    {
+        "Orientation",
+        "Location",
+        "Magnetometer",
+        "Metadata",
+    }
+)
+
+required_sensor_logger_Location_keys = set(
+    {
+        "time",
+        "altitude",
+        "speedAccuracy",
+        "bearingAccuracy",
+        "latitude",
+        "longitude",
+        "speed",
+        "bearing",
+        "horizontalAccuracy",
+        "verticalAccuracy",
+    }
+)
 
 burner_required = set({"loggingTime", "avAudioRecorderPeakPower"})
 
@@ -222,9 +262,10 @@ MAX_VDOP = 20
 
 # https://stackoverflow.com/questions/56832608/how-can-i-interpolate-values-in-a-python-dataframe
 def interpolate(xval, df, xcol, ycol):
-# compute xval as the linear interpolation of xval where df is a dataframe and
-#  df.x are the x coordinates, and df.y are the y coordinates. df.x is expected to be sorted.
+    # compute xval as the linear interpolation of xval where df is a dataframe and
+    #  df.x are the x coordinates, and df.y are the y coordinates. df.x is expected to be sorted.
     return np.interp([xval], df[xcol], df[ycol])
+
 
 def gettime(value, offset=0):
     if isinstance(value, float):
@@ -234,6 +275,7 @@ def gettime(value, offset=0):
     if isinstance(value, datetime):
         return value + timedelta(seconds=offset)
     raise Exception(f"invalid type for time: {value} : {type(value)}")
+
 
 def to_timestamp(value):
     if isinstance(value, float):
@@ -247,6 +289,7 @@ def to_timestamp(value):
 
     raise Exception(f"invalid type for time: {value} : {type(value)}")
 
+
 class PathSet:
     _serial = count(0)
     _labels = count(0)
@@ -259,9 +302,10 @@ class PathSet:
         # trajectory=None,  # for simulated flights
         sensorlog=None,
         sensor_logger=None,
+        gj=None,
         typus=TRACK_GPX,
         filename=None,
-        args=None
+        args=None,
     ):
 
         self.serial = next(self._serial)
@@ -271,6 +315,7 @@ class PathSet:
         self.typus = typus
         self.sensorlog = sensorlog
         self.sensor_logger = sensor_logger
+        self.gj = gj
         self.filename = filename
         self.args = args
 
@@ -322,6 +367,47 @@ class PathSet:
                 f"{self.filename} valid: {self.first_valid}..{self.last_valid} of {i}"
             )
 
+        if self.typus == TRACK_BALLONVARIO_GEOJSON:
+            self.first_valid = -1
+            self.last_valid = -1
+            i = -1
+            #print(self.gj)
+            n = len(self.gj["features"])
+            for i in range(n):
+                props = self.gj["features"][i].get("properties", None)
+                if props:
+                    startflag = props.get("startflag", None)
+                    if startflag == True:
+                        self.first_valid = i
+                        break
+            self.first_valid = max(0, self.first_valid)
+
+            self.last_valid = n-1
+            for i in range(n-1, -1, -1):
+                props = self.gj["features"][i].get("properties", None)
+                if props:
+                    startflag = props.get("startflag", None)
+                    #logging.debug(f"{i=} {startflag=}")
+                    if startflag == True:
+                        self.last_valid = i
+                        break
+            self.last_valid = min(n, self.last_valid)
+
+            # self.first_valid = 0
+            # self.last_valid = n -1
+            # if not required_sensor_logger_Location_keys <= set(sample):
+            #     logging.debug(f"missing keys - skipping {sample}")
+            #     continue
+            # if sample["horizontalAccuracy"] > self.args.max_hdop:
+            #     sample["invalid"] = True
+            #     continue
+            # if sample["verticalAccuracy"] > self.args.max_vdop:
+            #     sample["invalid"] = True
+            #     continue
+
+            logging.debug(
+                f"{self.filename} valid: {self.first_valid}..{self.last_valid} of {n}"
+            )
 
     def starttime(self, skip=0):
         if self.typus == TRACK_SENSORLOG:
@@ -329,7 +415,14 @@ class PathSet:
             return dateutil.parser.parse(datestring) + timedelta(seconds=skip)
 
         if self.typus == TRACK_SENSOR_LOGGER:
-            return gettime(self.sensor_logger["Location"][self.first_valid]["time"], offset=skip)
+            return gettime(
+                self.sensor_logger["Location"][self.first_valid]["time"], offset=skip
+            )
+
+        if self.typus == TRACK_BALLONVARIO_GEOJSON:
+                   return gettime(
+                self.gj["features"][self.first_valid]["properties"]["time"], offset=skip
+            )
 
         return self.track.get_time_bounds().start_time + timedelta(seconds=skip)
 
@@ -339,8 +432,14 @@ class PathSet:
             return dateutil.parser.parse(datestring) - timedelta(seconds=trim)
 
         if self.typus == TRACK_SENSOR_LOGGER:
-            return gettime(self.sensor_logger["Location"][self.last_valid]["time"], offset=trim)
+            return gettime(
+                self.sensor_logger["Location"][self.last_valid]["properties"]["time"], offset=trim
+            )
 
+        if self.typus == TRACK_BALLONVARIO_GEOJSON:
+                   return gettime(
+                self.gj["features"][self.last_valid]["properties"]["time"], offset=trim
+            )
         return self.track.get_time_bounds().end_time - timedelta(seconds=trim)
 
     def availability(self, skip=0, trim=0):
@@ -386,7 +485,9 @@ class PathSet:
 
         if self.typus == TRACK_SENSOR_LOGGER:
             start = self.starttime()
-            for sample in self.sensor_logger["Location"][self.first_valid : self.last_valid + 1]:
+            for sample in self.sensor_logger["Location"][
+                self.first_valid : self.last_valid + 1
+            ]:
                 if not required_sensor_logger_Location_keys.issubset(sample.keys()):
                     logging.debug(f"skipping sample: {sample.keys()}")
                     continue
@@ -406,6 +507,21 @@ class PathSet:
                     ]
                 )
             return results
+
+        if self.typus == TRACK_BALLONVARIO_GEOJSON:
+
+            start = self.starttime()
+            for f in self.gj["features"][self.first_valid : self.last_valid + 1]:
+                coords = f["geometry"]["coordinates"] # lon lat ele
+                t = gettime(f["properties"]["time"])
+                if timestamps:
+                    results.append(timedelta.total_seconds(t - start))
+                results.extend(
+                    [coords[1],coords[0], coords[2] + zcorrect]
+                )
+            return results
+
+
 
         if self.typus == TRACK_GPX or self.typus == TRAJ_WINDY_GPX:
 
@@ -540,7 +656,6 @@ class PathSet:
                 was_burning = burning
             return samples
 
-
     def orient(self, args, hprfunc=hpr_default):
 
         if self.typus == TRACK_SENSORLOG:
@@ -594,8 +709,8 @@ class PathSet:
                 ts = to_timestamp(sample["time"])
                 timetag = ts - ts0
 
-                azimuth = math.pi + interpolate(ts, orient_values, 'time', 'yaw')
-                #logging.debug(f"azimuth={np.degrees(azimuth)}")
+                azimuth = math.pi + interpolate(ts, orient_values, "time", "yaw")
+                # logging.debug(f"azimuth={np.degrees(azimuth)}")
 
                 if args.gyro:
                     a = hpr2Quaternion(
@@ -603,9 +718,9 @@ class PathSet:
                         sample["longitude"],
                         sample["altitude"],
                         azimuth,
-                        math.pi + interpolate(ts, orient_values, 'time', 'pitch'),
-                        math.pi + interpolate(ts, orient_values, 'time', 'roll'),
-                        degrees=False
+                        math.pi + interpolate(ts, orient_values, "time", "pitch"),
+                        math.pi + interpolate(ts, orient_values, "time", "roll"),
+                        degrees=False,
                     )
                 else:
                     a = hpr2Quaternion(
@@ -615,7 +730,7 @@ class PathSet:
                         azimuth,
                         0,
                         0,
-                        degrees=False
+                        degrees=False,
                     )
 
                 # [Time, X, Y, Z, W, Time, X, Y, Z, W, ...]
@@ -624,6 +739,21 @@ class PathSet:
 
             return results
 
+        if self.typus == TRACK_BALLONVARIO_GEOJSON:
+            yaw = 0 # not logged yet
+            pitch = 0
+            roll = 0
+
+            results = []
+            start = self.starttime()
+            for f in self.gj["features"][self.first_valid : self.last_valid + 1]:
+                coords = f["geometry"]["coordinates"] # lon lat ele
+                t = gettime(f["properties"]["time"])
+                timetag = timedelta.total_seconds(t - start)
+                a = hpr2Quaternion(coords[0], coords[1],  coords[2],
+                                   yaw, pitch, roll)
+                results.extend([timetag, a[0], a[1], a[2], a[3]])
+            return results
 
 
         # if self.typus == TRACK_GPX:
@@ -1092,7 +1222,6 @@ class PathSet:
         )
         packets.append(p)
 
-
     def gen_track_sensor_logger(
         self, args, packets, vehicle=None, genlabel=False, **kwargs
     ):
@@ -1132,12 +1261,16 @@ class PathSet:
             }
 
             vehicle = Model(
-                gltf=args.model_uri, scale=1.0, minimumPixelSize=64,
-                nodeTransformations=nt
+                gltf=args.model_uri,
+                scale=1.0,
+                minimumPixelSize=64,
+                nodeTransformations=nt,
             )
         else:
             vehicle = Model(
-                gltf=args.model_uri, scale=1.0, minimumPixelSize=64,
+                gltf=args.model_uri,
+                scale=1.0,
+                minimumPixelSize=64,
             )
 
         kwargs = dict()
@@ -1174,6 +1307,93 @@ class PathSet:
         packets.append(p)
 
 
+    def gen_track_geojson(
+        self, args, packets, vehicle=None, genlabel=False, **kwargs
+    ):
+        logging.debug(f"BallonVario track {self.filename} {args=}")
+        lb = None
+        if genlabel:
+            lb = Label(
+                text="fixme  gen_track BallonVario",
+                show=True,
+                scale=0.5,
+                pixelOffset={"cartesian2": [50, -30]},
+            )
+
+        position = Position(
+            interpolationDegree=args.degree,
+            interpolationAlgorithm=args.algo,
+            epoch=self.starttime(),
+            cartographicDegrees=self.data(zcorrect=args.delta_h),
+        )
+
+        red = Color(rgba=[255, 0, 0, 64])
+        grn = Color(rgba=[0, 255, 0, 64])
+        po = PolylineOutlineMaterial(color=red, outlineColor=grn, outlineWidth=4)
+        path = Path(
+            material=Material(polylineOutline=po),
+            width=6,
+            leadTime=0,
+            trailTime=100000,
+            resolution=5,
+        )
+
+        burner = self.burner_intervals(args)
+        if burner:
+            nt = {
+                "Burner1": {"scale": burner},
+                "Burner2": {"scale": burner},
+            }
+
+            vehicle = Model(
+                gltf=args.model_uri,
+                scale=1.0,
+                minimumPixelSize=64,
+                nodeTransformations=nt,
+            )
+        else:
+            vehicle = Model(
+                gltf=args.model_uri,
+                scale=1.0,
+                minimumPixelSize=64,
+            )
+
+        kwargs = dict()
+        properties = dict()
+
+        options = {
+            "velocity_orient": args.velocity_orient,
+        }
+
+        properties = {**properties, **options}
+        if args.fake_sensors:
+            properties = {**properties, **self.simulate_sensors(args)}
+
+        p = Packet(
+            id=f"track{self.serial}",
+            name=args.docname,
+            # viewFrom=45,800,300&lookAt=track0
+            viewFrom=ViewFrom(cartesian=Cartesian3Value(values=viewFromPos)),
+            description=args.doccomment,
+            position=position,
+            orientation=Orientation(
+                interpolationDegree=args.degree,
+                interpolationAlgorithm=args.algo,
+                epoch=self.starttime(),
+                unitQuaternion=self.orient(args),
+            ),
+            label=lb,
+            path=path,
+            model=vehicle,
+            availability=self.availability(),
+            properties=properties,
+            **kwargs,
+        )
+        packets.append(p)
+
+
+
+
     def generate(self, args, packets, **kwargs):
         if self.typus == TRAJ_WINDY_GPX:
             self.gen_traj_windy(args, packets, **kwargs)
@@ -1194,6 +1414,11 @@ class PathSet:
 
         if self.typus == TRACK_SENSOR_LOGGER:
             self.gen_track_sensor_logger(args, packets, **kwargs)
+
+
+        if self.typus == TRACK_BALLONVARIO_GEOJSON:
+            self.gen_track_geojson(args, packets, **kwargs)
+
 
     def simulate_burner(self, args):
         BURNER_INTERVAL_MU = 15
@@ -1670,7 +1895,9 @@ def main():
                 gpx = gpxpy.parse(gpx_file)
                 i = 0
                 for t in gpx.tracks:
-                    gp = PathSet(gpx=gpx, track=t, typus=TRACK_GPX, filename=filename, args=args)
+                    gp = PathSet(
+                        gpx=gpx, track=t, typus=TRACK_GPX, filename=filename, args=args
+                    )
                     gp.ext = parse_ext(t)
                     begin, end = t.get_time_bounds()
                     logging.debug(f"{begin=}  {end=}")
@@ -1690,7 +1917,9 @@ def main():
             # 1624098163,2021-06-19T10:22:43Z,OEKGO,"46.936798,15.387732",2000,100,0
             gpx = csv2gpx(fnp)
             t = gpx.tracks[0]
-            gp = PathSet(gpx=gpx, track=t, typus=TRACK_GPX, filename=filename, args=args)
+            gp = PathSet(
+                gpx=gpx, track=t, typus=TRACK_GPX, filename=filename, args=args
+            )
             gp.filename = fnp
             logging.debug(f"{filename}: FR24 CSV: {gp.filename}")
             result.append(gp)
@@ -1708,7 +1937,9 @@ def main():
 
                     gpx = igc2gpx(args, header, fix_records, fnp.stem)
                     t = gpx.tracks[0]
-                    gp = PathSet(gpx=gpx, track=t, typus=TRACK_GPX, filename=filename, args=args)
+                    gp = PathSet(
+                        gpx=gpx, track=t, typus=TRACK_GPX, filename=filename, args=args
+                    )
                     begin, end = t.get_time_bounds()
                     mintime = min(mintime, begin)
                     maxtime = max(maxtime, end)
@@ -1732,20 +1963,50 @@ def main():
                     logging.error(f"{fnp}: empty JSON track")
                     continue
 
-                if isinstance(content, list) and sensorlog_keys.issubset(content[0].keys()):
+                if isinstance(content, list) and sensorlog_keys.issubset(
+                    content[0].keys()
+                ):
                     logging.debug(f"{fnp}: sensorlog format detected")
                     # logging.debug(f"{fnp}: {content[0].keys()}")
-                    gp = PathSet(sensorlog=content, typus=TRACK_SENSORLOG, filename=fnp, args=args)
+                    gp = PathSet(
+                        sensorlog=content,
+                        typus=TRACK_SENSORLOG,
+                        filename=fnp,
+                        args=args,
+                    )
                     gp.name = "sensorlog " + str(fnp)
                     mintime = min(mintime, gp.starttime())
                     maxtime = max(maxtime, gp.stoptime(trim=FUDGE))
                     result.append(gp)
                     continue
 
-                if isinstance(content, dict) and required_sensor_logger_keys.issubset(content.keys()):
+                if isinstance(content, dict) and required_sensor_logger_keys.issubset(
+                    content.keys()
+                ):
                     logging.debug(f"{fnp}: Sensor Logger format detected")
-                    gp = PathSet(sensor_logger=content, typus=TRACK_SENSOR_LOGGER, filename=fnp, args=args)
+                    gp = PathSet(
+                        sensor_logger=content,
+                        typus=TRACK_SENSOR_LOGGER,
+                        filename=fnp,
+                        args=args,
+                    )
                     gp.name = "Sensor Logger " + str(fnp)
+                    mintime = min(mintime, gp.starttime())
+                    maxtime = max(maxtime, gp.stoptime(trim=FUDGE))
+                    result.append(gp)
+                    continue
+
+                if isinstance(content, dict) and geojson_keys.issubset(
+                    content.keys()
+                ):
+                    logging.debug(f"{fnp}: GeoJSON format detected")
+                    gp = PathSet(
+                        gj=content,
+                        typus=TRACK_BALLONVARIO_GEOJSON,
+                        filename=fnp,
+                        args=args,
+                    )
+                    gp.name = "BallonVario GeoJSON " + str(fnp)
                     mintime = min(mintime, gp.starttime())
                     maxtime = max(maxtime, gp.stoptime(trim=FUDGE))
                     result.append(gp)
@@ -1766,7 +2027,11 @@ def main():
                     ext = parse_ext(t)
                     if {"model", "level", "distance"} <= set(ext):
                         gp = PathSet(
-                            gpx=gpx, track=t, typus=TRAJ_WINDY_GPX, filename=filename, args=args
+                            gpx=gpx,
+                            track=t,
+                            typus=TRAJ_WINDY_GPX,
+                            filename=filename,
+                            args=args,
                         )
                         gp.ext = ext
                         gp.name = "windy " + gp.ext["model"] + " " + t.name
@@ -1777,14 +2042,22 @@ def main():
                         gpx.author_name == "meteoblue AG"
                     ) and gpx.author_email == "info@meteoblue.com":
                         gp = PathSet(
-                            gpx=gpx, track=t, typus=TRAJ_METEOBLUE, filename=filename, args=args
+                            gpx=gpx,
+                            track=t,
+                            typus=TRAJ_METEOBLUE,
+                            filename=filename,
+                            args=args,
                         )
                         gp.name = "meteoblue " + t.name
                         logging.debug(f"{filename=}, meteoblue traj: {gp.name}")
 
                     elif gpx.creator == "GPSBabel - https://www.gpsbabel.org":
                         gp = PathSet(
-                            gpx=gpx, track=t, typus=TRAJ_METEOBLUE, filename=filename, args=args
+                            gpx=gpx,
+                            track=t,
+                            typus=TRAJ_METEOBLUE,
+                            filename=filename,
+                            args=args,
                         )
                         gp.name = "gpsbabel"
                         logging.debug(f"{filename=}, gpsbabel traj: {gp.name}")
@@ -1800,7 +2073,9 @@ def main():
                 gpx = gpxpy.gpx.GPX()
                 kml = parser.parse(kml_file).getroot()
                 logging.debug(kml.Document.Folder.name.text)
-                gp = PathSet(kml=kml, typus=TRAJ_WINDY_KML, filename=filename, args=args)
+                gp = PathSet(
+                    kml=kml, typus=TRAJ_WINDY_KML, filename=filename, args=args
+                )
                 gp.name = "windy " + filename
                 result.append(gp)
 
@@ -1832,9 +2107,10 @@ def main():
     document = Document(packets)
     temp = sys.stdout
     if args.output:
-        print(document.dumps(indent=4),file=open(args.output, 'w'))
+        print(document.dumps(indent=4), file=open(args.output, "w"))
     else:
         print(document.dumps(indent=4))  # , cls=NumpyEncoder)) #, default=np_encoder))
+
 
 if __name__ == "__main__":
     main()
