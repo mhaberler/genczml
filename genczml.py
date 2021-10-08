@@ -517,7 +517,7 @@ class PathSet:
                 if timestamps:
                     results.append(timedelta.total_seconds(t - start))
                 results.extend(
-                    [coords[1],coords[0], coords[2] + zcorrect]
+                    [coords[0], coords[1],coords[2] + zcorrect]
                 )
             return results
 
@@ -750,7 +750,7 @@ class PathSet:
                 coords = f["geometry"]["coordinates"] # lon lat ele
                 t = gettime(f["properties"]["time"])
                 timetag = timedelta.total_seconds(t - start)
-                a = hpr2Quaternion(coords[0], coords[1],  coords[2],
+                a = hpr2Quaternion(coords[1],  coords[0], coords[2],
                                    yaw, pitch, roll)
                 results.extend([timetag, a[0], a[1], a[2], a[3]])
             return results
