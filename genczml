@@ -306,6 +306,7 @@ class PathSet:
         typus=TRACK_GPX,
         filename=None,
         args=None,
+        model=None
     ):
 
         self.serial = next(self._serial)
@@ -318,6 +319,7 @@ class PathSet:
         self.gj = gj
         self.filename = filename
         self.args = args
+        self.model=model
 
         if self.typus == TRACK_SENSORLOG:
             self.first_valid = -1
@@ -1187,7 +1189,7 @@ class PathSet:
             "Burner2": {"scale": self.burner_intervals(args)},
         }
         vehicle = Model(
-            gltf=args.model_uri, scale=1.0, minimumPixelSize=64, nodeTransformations=nt
+            gltf=self.model, scale=1.0, minimumPixelSize=64, nodeTransformations=nt
         )
         kwargs = dict()
         properties = dict()
@@ -1261,14 +1263,14 @@ class PathSet:
             }
 
             vehicle = Model(
-                gltf=args.model_uri,
+                gltf=self.model,
                 scale=1.0,
                 minimumPixelSize=64,
                 nodeTransformations=nt,
             )
         else:
             vehicle = Model(
-                gltf=args.model_uri,
+                gltf=self.model,
                 scale=1.0,
                 minimumPixelSize=64,
             )
@@ -1346,14 +1348,14 @@ class PathSet:
             }
 
             vehicle = Model(
-                gltf=args.model_uri,
+                gltf=self.model,
                 scale=1.0,
                 minimumPixelSize=64,
                 nodeTransformations=nt,
             )
         else:
             vehicle = Model(
-                gltf=args.model_uri,
+                gltf=self.model,
                 scale=1.0,
                 minimumPixelSize=64,
             )
@@ -1728,14 +1730,7 @@ def main():
         type=float,
         help="set simplify distance for plain GPX tracks in m",
     )
-    ap.add_argument(
-        "-m",
-        "--model-uri",
-        action="store",
-        dest="model_uri",
-        default=DEFAULT_MODEL,
-        help="set the model URI",
-    )
+
     ap.add_argument(
         "-n",
         "--doc-name",
@@ -1791,6 +1786,14 @@ def main():
     )
     ap.add_argument("-T", "--traj", action="append", default=[])
     ap.add_argument("-t", "--track", action="append", default=[])
+    ap.add_argument(
+        "-m",
+        "--model-uri",
+        action="append",
+        dest="model_uri",
+        default=[],
+        help="set the model URI",
+    )
     ap.add_argument(
         "--skip-seconds",
         action="store",
@@ -1888,7 +1891,15 @@ def main():
     maxtime = datetime(MINYEAR, 1, 1, tzinfo=pytz.UTC)
     mintime = datetime(MAXYEAR, 12, 31, 23, 59, 59, 999999, tzinfo=pytz.UTC)
 
+    ti = -1
     for filename in args.track:
+        ti += 1
+        try:
+            model = args.model_uri[ti]
+        except IndexError:
+            model = DEFAULT_MODEL
+        logging.info(f"---------XXX ---------- {filename=}  {model=}")
+
         fnp = pathlib.Path(filename)
         if fnp.suffix == ".gpx":
             with open(filename, "r") as gpx_file:
@@ -1896,7 +1907,8 @@ def main():
                 i = 0
                 for t in gpx.tracks:
                     gp = PathSet(
-                        gpx=gpx, track=t, typus=TRACK_GPX, filename=filename, args=args
+                        gpx=gpx, track=t, typus=TRACK_GPX, filename=filename, 
+                        args=args, model=model
                     )
                     gp.ext = parse_ext(t)
                     begin, end = t.get_time_bounds()
@@ -1918,7 +1930,8 @@ def main():
             gpx = csv2gpx(fnp)
             t = gpx.tracks[0]
             gp = PathSet(
-                gpx=gpx, track=t, typus=TRACK_GPX, filename=filename, args=args
+                gpx=gpx, track=t, typus=TRACK_GPX, filename=filename, 
+                args=args, model=model
             )
             gp.filename = fnp
             logging.debug(f"{filename}: FR24 CSV: {gp.filename}")
@@ -1938,7 +1951,8 @@ def main():
                     gpx = igc2gpx(args, header, fix_records, fnp.stem)
                     t = gpx.tracks[0]
                     gp = PathSet(
-                        gpx=gpx, track=t, typus=TRACK_GPX, filename=filename, args=args
+                        gpx=gpx, track=t, typus=TRACK_GPX, filename=filename, 
+                        args=args, model=model
                     )
                     begin, end = t.get_time_bounds()
                     mintime = min(mintime, begin)
@@ -1973,6 +1987,7 @@ def main():
                         typus=TRACK_SENSORLOG,
                         filename=fnp,
                         args=args,
+                        model=model
                     )
                     gp.name = "sensorlog " + str(fnp)
                     mintime = min(mintime, gp.starttime())
@@ -1989,6 +2004,7 @@ def main():
                         typus=TRACK_SENSOR_LOGGER,
                         filename=fnp,
                         args=args,
+                        model=model
                     )
                     gp.name = "Sensor Logger " + str(fnp)
                     mintime = min(mintime, gp.starttime())
@@ -2005,6 +2021,7 @@ def main():
                         typus=TRACK_BALLONVARIO_GEOJSON,
                         filename=fnp,
                         args=args,
+                        model=model
                     )
                     gp.name = "BallonVario GeoJSON " + str(fnp)
                     mintime = min(mintime, gp.starttime())
@@ -2012,10 +2029,12 @@ def main():
                     result.append(gp)
                     continue
 
-                logging.error(f"{fnp}: cant decode json")
-                continue
+                else:
+                    logging.error(f"{fnp}: cant decode json")
+                    continue
 
-            result.append(gp)
+            # result.append(gp)
+
 
     for filename in args.traj:
         fnp = pathlib.Path(filename)
