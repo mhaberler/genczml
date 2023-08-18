@@ -5,7 +5,7 @@ import numpy as np
 from transformations import rotation_matrix, quaternion_from_matrix, quaternion_multiply, quaternion_conjugate
 from pymap3d.ecef import geodetic2ecef
 
-from cesiumNEDtoFixedFrame import northEastDownToFixedFrame
+from cesium_support import northEastDownToFixedFrame
 
 
 def hpr2Quaternion(lat, lon, alt, heading, pitch, roll, degrees=True):

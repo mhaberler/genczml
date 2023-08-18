@@ -1,0 +1,19 @@
+python genczml.py -d -t ../sensorlogger/2021-07-21_06-11-18_reformat.json --vdop 20 >2021-07-21_06-11-18_reformat.czml
+python genczml.py --delta-h 1.5 -d --vdop 20  -t ../sensorlogger/2021-07-22_06-17-01_reformat.json >2021-07-22_06-17-01.czml
+
+
+
+python genczml.py --delta-h 1.5 -d --vdop 20  -t ../../gpx/sanfortunato/susanne-050820-fixed.gpx    \
+  -t ../../gpx/sanfortunato/panta-050820.gpx    \
+   -t ../../gpx/sanfortunato/matthias-050820-fixed.gpx    -o todi20200805.czml
+
+
+python genczml.py --delta-h 1.5 -d --vdop 20  -t ../../gpx/sanfortunato/david-060820-fixed.gpx
+  -t ../../gpx/sanfortunato/mah-060820.gpx       -o todi20200806.czml
+
+
+python genczml.py -d --vdop 10 --hdop 10 -t ../sensorlogger/2021-07-24_11-41-58_reformat.json -m https://static.mah.priv.at/cors/paraglider.glb -o nussi.czml
+
+python genczml.py -d --vdop 10 --hdop 10 -t ../sensorlogger/2021-07-24_11-41-58_reformat.json -m https://static.mah.priv.at/cors/paraglider.glb -o nussi.czml
+
+python genczml.py --delta-h 1.5 -d --vdop 20  -t ../../gpx/sanfortunato/panta-050820.gpx  -m https://static.mah.priv.at/cors/models/oferl.glb -o oferl.czml

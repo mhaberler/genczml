@@ -1,0 +1,37 @@
+
+ 503  cd /Users/mah/Ballon/src/gpx2czml
+  504  ./genczml
+  505  pip install pytz
+  506  ./genczml
+  507  pip install yattag
+  508   pip install --upgrade pip
+  509  ./genczml
+  510   pip install gpxpy
+  511  ./genczml
+  512   pip install aerofiles
+  513  ./genczml
+  514   pip install pykml
+  515  ./genczml
+  516   pip install dateutil
+  517  vi genczml
+  518  pip install python-dateutil
+  519  vi genczml
+  520  ./genczml
+  521  pip install numy
+  522  pip install numpy
+  523  ./genczml
+  524  pip install pandas
+  525  ./genczml
+  526  pip install geojson
+  527  ./genczml
+  528  pip install transforms3d
+  529  ./genczml
+  530  pip install transformations
+  531  ./genczml
+  532  pip install czml3
+  533  ./genczml
+  534  pip install pymap3d
+  535  ./genczml
+  536  history 
+
+

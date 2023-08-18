@@ -1,4 +1,6 @@
-#!/usr/bin/env python3
+#!//Users/mah/Ballon/src/gpx2czml/.venv/bin/python3
+
+
 import sys
 import re
 import json
@@ -1937,7 +1939,7 @@ def main():
             logging.debug(f"{filename}: FR24 CSV: {gp.filename}")
             result.append(gp)
 
-        if fnp.suffix == ".igc":
+        if fnp.suffix.lower() == ".igc":
             r = Reader()
             try:
                 with open(filename) as fd:
